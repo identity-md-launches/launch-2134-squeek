@@ -7,6 +7,7 @@ import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.so
 import {Squeek} from "../src/Squeek.sol";
 import {FactoryHarness} from "./helpers/FactoryHarness.sol";
 
+/// forge-config: default.fuzz.runs = 1000
 contract SqueekTest is Test {
     uint256 private constant SUPPLY = 1_000_000_000_000_000_000_000_000_000;
 
@@ -118,6 +119,33 @@ contract SqueekTest is Test {
         assertTrue(token.transfer(alice, SUPPLY));
         assertEq(token.balanceOf(address(this)), 0);
         assertEq(token.balanceOf(alice), SUPPLY);
+    }
+
+    function test_oneSmallestUnitCanMakeARoundTrip() public {
+        assertTrue(token.transfer(alice, 1));
+        assertEq(token.balanceOf(alice), 1);
+        assertEq(token.balanceOf(address(this)), SUPPLY - 1);
+        vm.prank(alice);
+        assertTrue(token.transfer(address(this), 1));
+        assertEq(token.balanceOf(alice), 0);
+        assertEq(token.balanceOf(address(this)), SUPPLY);
+        assertEq(token.totalSupply(), SUPPLY);
+    }
+
+    function test_maximumTransferAndOverdrawnSelfTransferRevert() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientBalance.selector, address(this), SUPPLY, type(uint256).max
+            )
+        );
+        token.transfer(alice, type(uint256).max);
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, address(this), SUPPLY, SUPPLY + 1)
+        );
+        token.transfer(address(this), SUPPLY + 1);
+        assertEq(token.balanceOf(address(this)), SUPPLY);
+        assertEq(token.balanceOf(alice), 0);
+        assertEq(token.totalSupply(), SUPPLY);
     }
 
     function test_selfTransferPreservesBalance() public {
@@ -367,7 +395,8 @@ contract SqueekTest is Test {
     }
 
     function testFuzz_transferConservesSupply(uint256 rawAmount, address recipient) public {
-        vm.assume(recipient != address(0) && recipient != address(this));
+        recipient = address(uint160(bound(uint160(recipient), 1, type(uint160).max)));
+        if (recipient == address(this)) recipient = alice;
         uint256 amount = bound(rawAmount, 0, SUPPLY);
         assertTrue(token.transfer(recipient, amount));
         assertEq(token.balanceOf(recipient), amount);
